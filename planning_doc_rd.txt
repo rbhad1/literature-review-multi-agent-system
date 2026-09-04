@@ -1,3 +1,4 @@
 Project kickoff started.
 Research phase begins.
 Implementation phase begins.
+Testing phase begins.
