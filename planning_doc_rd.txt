@@ -1,2 +1,3 @@
 Project kickoff started.
 Research phase begins.
+Implementation phase begins.
