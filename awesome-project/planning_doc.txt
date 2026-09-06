@@ -1,0 +1,6 @@
+Literature Review Agent — Project Plan
+Goal: A multi-agent system that helps CS/ML researchers conduct a preliminary literature review. 
+
+Input: Keywords or seed paper
+Output: List of relevant papers (ranked) + literature review that summarizes main ideas and highlights limitations and gaps in current literatures. 
+
