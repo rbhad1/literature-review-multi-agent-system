@@ -4,3 +4,9 @@ Goal: A multi-agent system that helps CS/ML researchers conduct a preliminary li
 Input: Keywords or seed paper
 Output: List of relevant papers (ranked) + literature review that summarizes main ideas and highlights limitations and gaps in current literatures. 
 
+Features:
+
+Data Sources:
+- Semantic scholar: search, recommendations, citation and reference search, can use SPECTER2 embeddings for similarity scores
+- arXiv API: monitoring, find papers that were published recently (semantic scholar is delayed by days/1-2 weeks)
+- Google scholar --> scraping would be difficult
