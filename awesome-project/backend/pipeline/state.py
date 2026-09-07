@@ -20,13 +20,21 @@ class PipelineState(TypedDict, total=False):
     seed_papers_resolved: List[dict]
     seed_candidates: List[dict]
 
-    # --- ranking output ---
+    # --- ranking output (per-track, pre-merge) ---
     query_ranked: List[dict]
     seed_ranked: List[dict]
 
+    # --- ranking-critic output ---
+    # ranking_critic_node merges query_ranked + seed_ranked into a single
+    # `ranked` list (dedup by paperId), then runs an LLM-as-judge over its
+    # top-N BEFORE extraction spend. The judge may reorder / drop papers
+    # exactly once (no loop back -- see graph.py). Everything downstream of
+    # here works on the one `ranked` list, hybrid mode included.
+    ranked: List[dict]
+    ranking_critic: dict  # the judge's JSON: {score, flagged, notes, reranked_ids, drop_ids}
+
     # --- extraction output ---
-    query_extracted: List[dict]
-    seed_extracted: List[dict]
+    extracted: List[dict]
 
     # --- synthesis / critic output ---
     synthesis: dict

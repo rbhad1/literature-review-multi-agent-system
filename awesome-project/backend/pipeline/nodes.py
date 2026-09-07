@@ -110,6 +110,7 @@ def retrieval_node(state: PipelineState) -> PipelineState:
 # ---------------------------------------------------------------------------
 # Ranking: relevance (from strategy) + citation count + recency.
 # ---------------------------------------------------------------------------
+# TODO: play around with decay factor 
 def _recency_score(year, now_year=None) -> float:
     if not year:
         return 0.0
@@ -123,7 +124,7 @@ def _rank_list(papers: list) -> list:
     for paper in papers:
         citation_score = math.log1p(paper.get("citationCount", 0) or 0)
         recency = _recency_score(paper.get("year"))
-        base_relevance = paper.get("score", 0.0) or 0.0
+        base_relevance = paper.get("score", 0.0) or 0.0 # check recommendation_strats.py
         combined = 0.5 * base_relevance + 0.3 * (citation_score / 10) + 0.2 * recency
         scored.append({**paper, "score": combined})
     scored.sort(key=lambda p: p["score"], reverse=True)
@@ -135,6 +136,103 @@ def ranking_node(state: PipelineState) -> PipelineState:
         state["query_ranked"] = _rank_list(state["query_candidates"])
     if state.get("seed_candidates"):
         state["seed_ranked"] = _rank_list(state["seed_candidates"])
+    return state
+
+
+# ---------------------------------------------------------------------------
+# Ranking critic: first merges the query- and seed-ranked lists into ONE
+# ranked list (even in hybrid mode -- everything downstream works on a single
+# list), then runs an LLM-as-judge over its top-N BEFORE extraction so a bad
+# ranking doesn't waste extraction calls. The judge can hand back a corrected
+# order and/or a drop list, applied exactly once -- there is no edge back to
+# ranking (see graph.py). In pure seed-mode (no query text) there's nothing to
+# judge relevance against, so the judge is skipped and the merged list passes
+# through as-is.
+# ---------------------------------------------------------------------------
+def _merge_ranked(query_ranked: list, seed_ranked: list) -> list:
+    """Union the two tracks, de-duplicated by paperId. A paper found on both
+    sides keeps its higher score and a combined provenance tag. Result is
+    sorted by score descending so the top-N the judge sees is the global top-N,
+    not one track's."""
+    merged: dict = {}
+    for paper in list(query_ranked or []) + list(seed_ranked or []):
+        pid = paper.get("paperId")
+        if not pid:
+            continue
+        existing = merged.get(pid)
+        if existing is None:
+            merged[pid] = dict(paper)
+            continue
+        if (paper.get("score") or 0.0) > (existing.get("score") or 0.0):
+            existing["score"] = paper.get("score")
+        provs = {existing.get("provenance"), paper.get("provenance")} - {None}
+        existing["provenance"] = "+".join(sorted(provs)) if provs else None
+    return sorted(merged.values(), key=lambda p: p.get("score") or 0.0, reverse=True)
+def _critique_ranking(question: str, ranked: list) -> dict:
+    top = ranked[:config.TOP_N_TO_EXTRACT]
+    listing = "\n".join(
+        f"{i}. [{p.get('paperId')}] {p.get('title')} "
+        f"(year={p.get('year')}, citations={p.get('citationCount')}, "
+        f"score={round(p.get('score', 0.0) or 0.0, 3)}, provenance={p.get('provenance')})\n"
+        f"   abstract: {(p.get('abstract') or 'N/A')[:400]}"
+        for i, p in enumerate(top)
+    )
+    prompt = (
+        f'Research question: "{question}"\n\n'
+        f"A retrieval pipeline ranked these candidate papers (position 0 = most "
+        f"relevant). Act as an impartial judge of this ranking.\n\n"
+        f"{listing}\n\n"
+        f"Assess: (a) whether the top papers are genuinely on-topic for the "
+        f"research question, (b) whether the ordering is defensible, (c) whether "
+        f"they cover the question's sub-aspects rather than piling onto one "
+        f"narrow cluster.\n\n"
+        f"If the ranking is sound, echo the ids back in the same order with an "
+        f"empty drop list. Otherwise return a corrected ordering by paperId "
+        f"and/or a list of paperIds to drop as off-topic.\n\n"
+        f'Return JSON: {{"score": <0-1 float>, "flagged": ["..."], '
+        f'"notes": "...", "reranked_ids": ["<paperId>", "..."], '
+        f'"drop_ids": ["<paperId>", "..."]}}'
+    )
+    return llm_provider.complete_json("critic", prompt)
+
+
+def _apply_ranking_correction(ranked: list, critique: dict) -> list:
+    """Reorder `ranked` to the critic's `reranked_ids`, remove `drop_ids`.
+    Any paper the critic didn't mention keeps its relative order and is
+    appended after the explicitly ordered ones -- so a partial/garbled LLM
+    response degrades to 'mostly unchanged', never to data loss."""
+    by_id = {p.get("paperId"): p for p in ranked}
+    drop = set(critique.get("drop_ids") or [])
+    order = [pid for pid in (critique.get("reranked_ids") or [])
+             if pid in by_id and pid not in drop]
+
+    corrected = [by_id[pid] for pid in order]
+    seen = set(order)
+    for paper in ranked:
+        pid = paper.get("paperId")
+        if pid not in seen and pid not in drop:
+            corrected.append(paper)
+    return corrected
+
+
+def ranking_critic_node(state: PipelineState) -> PipelineState:
+    question = state.get("query") or ""
+
+    ranked = _merge_ranked(state.get("query_ranked"), state.get("seed_ranked"))
+    if not ranked:
+        state["ranked"] = []
+        state["ranking_critic"] = {}
+        return state
+
+    if question:
+        crit = _critique_ranking(question, ranked)
+        state["ranking_critic"] = crit
+        if crit.get("reranked_ids") or crit.get("drop_ids"):
+            ranked = _apply_ranking_correction(ranked, crit)
+    else:
+        state["ranking_critic"] = {}
+
+    state["ranked"] = ranked
     return state
 
 
@@ -157,10 +255,8 @@ def _extract_one(paper: dict) -> dict:
 
 def extraction_node(state: PipelineState) -> PipelineState:
     n = config.TOP_N_TO_EXTRACT
-    if state.get("query_ranked"):
-        state["query_extracted"] = [_extract_one(p) for p in state["query_ranked"][:n]]
-    if state.get("seed_ranked"):
-        state["seed_extracted"] = [_extract_one(p) for p in state["seed_ranked"][:n]]
+    ranked = state.get("ranked") or []
+    state["extracted"] = [_extract_one(p) for p in ranked[:n]]
     return state
 
 
@@ -168,7 +264,7 @@ def extraction_node(state: PipelineState) -> PipelineState:
 # Synthesis: cross-paper themes, gaps, limitations narrative.
 # ---------------------------------------------------------------------------
 def synthesis_node(state: PipelineState) -> PipelineState:
-    all_papers = (state.get("query_extracted") or []) + (state.get("seed_extracted") or [])
+    all_papers = state.get("extracted") or []
     if not all_papers:
         state["synthesis"] = {"themes": [], "gaps": [], "limitations_summary": [], "narrative": ""}
         return state
@@ -195,7 +291,7 @@ def synthesis_node(state: PipelineState) -> PipelineState:
 # ---------------------------------------------------------------------------
 def critic_node(state: PipelineState) -> PipelineState:
     synthesis = state.get("synthesis") or {}
-    all_papers = (state.get("query_extracted") or []) + (state.get("seed_extracted") or [])
+    all_papers = state.get("extracted") or []
     titles = [p.get("title") for p in all_papers]
 
     prompt = (
