@@ -141,34 +141,15 @@ def ranking_node(state: PipelineState) -> PipelineState:
 
 
 # ---------------------------------------------------------------------------
-# Ranking critic: first merges the query- and seed-ranked lists into ONE
-# ranked list (even in hybrid mode -- everything downstream works on a single
-# list), then runs an LLM-as-judge over its top-N BEFORE extraction so a bad
-# ranking doesn't waste extraction calls. The judge can hand back a corrected
-# order and/or a drop list, applied exactly once -- there is no edge back to
-# ranking (see graph.py). In pure seed-mode (no query text) there's nothing to
-# judge relevance against, so the judge is skipped and the merged list passes
-# through as-is.
+# Ranking critic: picks ONE ranked list to carry forward, then runs an
+# LLM-as-judge over its top-N BEFORE extraction so a bad ranking doesn't waste
+# extraction calls. When both tracks are populated (hybrid mode) the SEED
+# track wins -- merging two differently-scaled score lists was more trouble
+# than it was worth; revisit later. The judge can hand back a corrected order
+# and/or a drop list, applied exactly once -- there is no edge back to ranking
+# (see graph.py). In pure seed-mode (no query text) there's nothing to judge
+# relevance against, so the judge is skipped and the list passes through as-is.
 # ---------------------------------------------------------------------------
-def _merge_ranked(query_ranked: list, seed_ranked: list) -> list:
-    """Union the two tracks, de-duplicated by paperId. A paper found on both
-    sides keeps its higher score and a combined provenance tag. Result is
-    sorted by score descending so the top-N the judge sees is the global top-N,
-    not one track's."""
-    merged: dict = {}
-    for paper in list(query_ranked or []) + list(seed_ranked or []):
-        pid = paper.get("paperId")
-        if not pid:
-            continue
-        existing = merged.get(pid)
-        if existing is None:
-            merged[pid] = dict(paper)
-            continue
-        if (paper.get("score") or 0.0) > (existing.get("score") or 0.0):
-            existing["score"] = paper.get("score")
-        provs = {existing.get("provenance"), paper.get("provenance")} - {None}
-        existing["provenance"] = "+".join(sorted(provs)) if provs else None
-    return sorted(merged.values(), key=lambda p: p.get("score") or 0.0, reverse=True)
 def _critique_ranking(question: str, ranked: list) -> dict:
     # Present the papers to the judge in RANDOM order, not pipeline-rank order.
     # LLMs systematically over-rate whatever comes first in a list, so showing
@@ -228,7 +209,8 @@ def _apply_ranking_correction(ranked: list, critique: dict) -> list:
 def ranking_critic_node(state: PipelineState) -> PipelineState:
     question = state.get("query") or ""
 
-    ranked = _merge_ranked(state.get("query_ranked"), state.get("seed_ranked"))
+    # No merge: in hybrid mode both tracks are populated -- prefer seed.
+    ranked = list(state.get("seed_ranked") or state.get("query_ranked") or [])
     if not ranked:
         state["ranked"] = []
         state["ranking_critic"] = {}
