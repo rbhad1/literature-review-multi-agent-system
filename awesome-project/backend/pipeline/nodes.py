@@ -5,6 +5,7 @@ returns the (mutated) state for the next node. See graph.py for how these
 are wired into a sequence, and pipeline/state.py for the shared schema.
 """
 import math
+import random
 from datetime import datetime, timezone
 
 from backend import config, llm_provider
@@ -169,26 +170,33 @@ def _merge_ranked(query_ranked: list, seed_ranked: list) -> list:
         existing["provenance"] = "+".join(sorted(provs)) if provs else None
     return sorted(merged.values(), key=lambda p: p.get("score") or 0.0, reverse=True)
 def _critique_ranking(question: str, ranked: list) -> dict:
+    # Present the papers to the judge in RANDOM order, not pipeline-rank order.
+    # LLMs systematically over-rate whatever comes first in a list, so showing
+    # them our current ranking would just get that ranking echoed back. The
+    # pipeline's own score is left out of the listing for the same reason.
+    # Output is keyed by paperId, so _apply_ranking_correction maps it back
+    # regardless of presentation order -- no un-shuffle step needed.
     top = ranked[:config.TOP_N_TO_EXTRACT]
+    shuffled = random.sample(top, k=len(top))
     listing = "\n".join(
-        f"{i}. [{p.get('paperId')}] {p.get('title')} "
+        f"- [{p.get('paperId')}] {p.get('title')} "
         f"(year={p.get('year')}, citations={p.get('citationCount')}, "
-        f"score={round(p.get('score', 0.0) or 0.0, 3)}, provenance={p.get('provenance')})\n"
-        f"   abstract: {(p.get('abstract') or 'N/A')[:400]}"
-        for i, p in enumerate(top)
+        f"provenance={p.get('provenance')})\n"
+        f"  abstract: {(p.get('abstract') or 'N/A')[:1200]}"
+        for p in shuffled
     )
     prompt = (
         f'Research question: "{question}"\n\n'
-        f"A retrieval pipeline ranked these candidate papers (position 0 = most "
-        f"relevant). Act as an impartial judge of this ranking.\n\n"
+        f"Below are candidate papers in ARBITRARY order. Act as an impartial "
+        f"judge and rank them yourself from scratch by relevance to the "
+        f"research question.\n\n"
         f"{listing}\n\n"
-        f"Assess: (a) whether the top papers are genuinely on-topic for the "
-        f"research question, (b) whether the ordering is defensible, (c) whether "
-        f"they cover the question's sub-aspects rather than piling onto one "
+        f"Assess: (a) whether each paper is genuinely on-topic for the research "
+        f"question, (b) what the correct relevance ordering is, (c) whether the "
+        f"set covers the question's sub-aspects rather than piling onto one "
         f"narrow cluster.\n\n"
-        f"If the ranking is sound, echo the ids back in the same order with an "
-        f"empty drop list. Otherwise return a corrected ordering by paperId "
-        f"and/or a list of paperIds to drop as off-topic.\n\n"
+        f"Return the paperIds ordered most- to least-relevant, plus any that "
+        f"should be dropped as off-topic.\n\n"
         f'Return JSON: {{"score": <0-1 float>, "flagged": ["..."], '
         f'"notes": "...", "reranked_ids": ["<paperId>", "..."], '
         f'"drop_ids": ["<paperId>", "..."]}}'
