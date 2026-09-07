@@ -11,9 +11,18 @@ is fully deprecated as of 2026 -- no more updates or bug fixes).
 """
 from abc import ABC, abstractmethod
 import json
+import random
+import time
 from google import genai
 from google.genai import types
+from google.genai import errors as genai_errors
 from backend import config
+
+# Gemini returns 429 (rate limit / quota) and 5xx (transient overload) fairly
+# often on the free tier. Retry those with exponential backoff + jitter before
+# giving up; anything else (400, 404 dead model, auth) fails fast.
+_RETRY_STATUSES = {429, 500, 502, 503, 504}
+_MAX_RETRIES = 4
 
 
 class LLMProvider(ABC):
@@ -35,12 +44,22 @@ class GeminiProvider(LLMProvider):
             system_instruction=system if system else None,
             response_mime_type="application/json" if json_mode else None,
         )
-        response = GeminiProvider._client.models.generate_content(
-            model=self.model_name,
-            contents=prompt,
-            config=gen_config,
-        )
-        return response.text
+        for attempt in range(_MAX_RETRIES + 1):
+            try:
+                response = GeminiProvider._client.models.generate_content(
+                    model=self.model_name,
+                    contents=prompt,
+                    config=gen_config,
+                )
+                return response.text
+            except genai_errors.APIError as e:
+                status = getattr(e, "code", None) or getattr(e, "status_code", None)
+                if status not in _RETRY_STATUSES or attempt == _MAX_RETRIES:
+                    raise
+                sleep_s = 2 ** attempt + random.uniform(0, 1)
+                print(f"[llm_provider] {self.model_name} {status}, retry "
+                      f"{attempt + 1}/{_MAX_RETRIES} in {sleep_s:.1f}s")
+                time.sleep(sleep_s)
 
 
 def get_provider(step: str) -> LLMProvider:
