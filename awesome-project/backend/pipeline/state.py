@@ -31,7 +31,9 @@ class PipelineState(TypedDict, total=False):
     # exactly once (no loop back -- see graph.py). Everything downstream of
     # here works on the one `ranked` list, hybrid mode included.
     ranked: List[dict]
-    ranking_critic: dict  # the judge's JSON: {score, flagged, notes, reranked_ids, drop_ids}
+    ranking_critic: dict  # the judge's JSON: {verdict, flagged, notes, reranked_ids, drop_ids}
+    #   verdict is categorical ("sound"|"minor_issues"|"poor") -- the judge
+    #   decides ORDERING (reranked_ids), never per-paper numeric scores.
 
     # --- extraction output ---
     extracted: List[dict]

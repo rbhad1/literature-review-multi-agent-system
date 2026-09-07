@@ -196,9 +196,11 @@ def _critique_ranking(question: str, ranked: list) -> dict:
         f"set covers the question's sub-aspects rather than piling onto one "
         f"narrow cluster.\n\n"
         f"Return the paperIds ordered most- to least-relevant, plus any that "
-        f"should be dropped as off-topic.\n\n"
-        f'Return JSON: {{"score": <0-1 float>, "flagged": ["..."], '
-        f'"notes": "...", "reranked_ids": ["<paperId>", "..."], '
+        f"should be dropped as off-topic. Do NOT assign numeric relevance "
+        f"scores -- only the ordering matters.\n\n"
+        f'Return JSON: {{"verdict": "sound" | "minor_issues" | "poor", '
+        f'"flagged": ["..."], "notes": "...", '
+        f'"reranked_ids": ["<paperId>", "..."], '
         f'"drop_ids": ["<paperId>", "..."]}}'
     )
     return llm_provider.complete_json("critic", prompt)
