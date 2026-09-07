@@ -221,3 +221,5 @@ __marimo__/
 # Skip
 .env 
 results.json
+script_runner.sh
+script.sh
