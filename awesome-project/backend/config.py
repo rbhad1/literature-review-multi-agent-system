@@ -11,16 +11,24 @@ S2_RECOMMENDATIONS_URL = "https://api.semanticscholar.org/recommendations/v1/pap
 
 # --- Model routing --------------------------------------------------------
 # The ONE place that maps a pipeline step to a specific Gemini model.
-# High-volume steps (extraction, relevance judging) use the cheap/high-quota
-# Flash-Lite tier; low-volume, high-value steps (synthesis, critic) use Pro.
-# Swapping providers later (Groq/Ollama/Claude) means changing this file and
-# llm_provider.py -- pipeline nodes never reference a model name directly.
+# High-volume steps (planner, extraction, relevance judging) use the cheap
+# Flash-Lite tier; low-volume, high-value steps (synthesis, critic) use the
+# larger Flash tier. Swapping providers later (Groq/Ollama/Claude) means
+# changing this file and llm_provider.py -- pipeline nodes never reference a
+# model name directly.
+#
+# Model IDs age out (the API 404s a removed model). If a run fails with
+# "model ... is no longer available", list current ones with:
+#   uv run python -c "from google import genai; from backend import config; \
+#     [print(m.name) for m in genai.Client(api_key=config.GEMINI_API_KEY).models.list()]"
+# 'gemini-2.5-pro' is unavailable / quota-exhausted on this key -- synthesis
+# and critic run on gemini-3.5-flash instead for now.
 MODEL_ROUTING = {
-    "planner": "gemini-2.5-flash-lite",
-    "extraction": "gemini-2.5-flash-lite",
-    "relevance_judge": "gemini-2.5-flash-lite",
-    "synthesis": "gemini-2.5-pro",
-    "critic": "gemini-2.5-pro",
+    "planner": "gemini-3.5-flash-lite",
+    "extraction": "gemini-3.5-flash-lite",
+    "relevance_judge": "gemini-3.5-flash-lite",
+    "synthesis": "gemini-3.5-flash",
+    "critic": "gemini-3.5-flash",
 }
 
 # --- Breadth presets (niche <-> broad), keyed 1-5 -------------------------
