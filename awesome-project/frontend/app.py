@@ -7,8 +7,16 @@ Enter keywords and/or seed DOIs, get back the synthesis paragraph and the
 ranked list of papers with external links. Runs the LangGraph pipeline
 in-process -- no separate API server needed.
 """
+import logging
 import sys
+import warnings
 from pathlib import Path
+
+# Keep the UI clean: no library warnings in the console or the app.
+warnings.filterwarnings("ignore")
+logging.getLogger().setLevel(logging.ERROR)
+for _noisy in ("google_genai", "httpx", "urllib3"):
+    logging.getLogger(_noisy).setLevel(logging.ERROR)
 
 # Let `import backend...` work no matter where streamlit is launched from.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -16,6 +24,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import streamlit as st
 
 from backend.pipeline.graph import build_graph
+
+# Pipeline node name -> plain progress label shown to the user.
+STEP_LABELS = {
+    "planner": "Planning search",
+    "retrieval": "Collecting sources",
+    "ranking": "Ranking sources",
+    "ranking_critic": "Reviewing rankings",
+    "extraction": "Reading papers",
+    "synthesis": "Synthesizing results",
+    "critic": "Checking synthesis",
+}
 
 
 @st.cache_resource
@@ -68,12 +87,20 @@ if submitted:
     if doi_list:
         payload["seed_paper_ids"] = doi_list
 
-    with st.spinner("Running pipeline — this can take a minute..."):
+    state: dict = {}
+    with st.status("Working...", expanded=True) as status:
         try:
-            state = _graph().invoke(payload)
+            for update in _graph().stream(payload, stream_mode="updates"):
+                for node, delta in update.items():
+                    if node in STEP_LABELS:
+                        st.write(f"✓ {STEP_LABELS[node]}")
+                    if isinstance(delta, dict):
+                        state.update(delta)
         except Exception as e:  # noqa: BLE001 - surface any pipeline failure to the user
+            status.update(label="Failed", state="error")
             st.error(f"Pipeline failed: {e}")
             st.stop()
+        status.update(label="Done", state="complete", expanded=False)
 
     synthesis = state.get("synthesis") or {}
     papers = state.get("extracted") or state.get("ranked") or []
