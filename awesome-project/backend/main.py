@@ -8,7 +8,7 @@ from fastapi import FastAPI, HTTPException
 
 from backend.schemas import ReviewRequest, ReviewResponse, ExtractedPaper
 from backend.pipeline.graph import build_graph
-from backend.utils import normalize_paper, is_doi, looks_like_doi_attempt
+from backend.utils import normalize_paper, is_doi, looks_like_doi_attempt, DOI_FORMAT_HINT
 
 app = FastAPI(title="Literature Review Agent")
 
@@ -34,7 +34,7 @@ def review(req: ReviewRequest):
     # that were clearly meant as a DOI but are malformed.
     for seed in req.seed_papers or []:
         if looks_like_doi_attempt(seed) and not is_doi(seed):
-            raise HTTPException(400, f"DOI not valid: {seed}")
+            raise HTTPException(400, f"DOI is not valid: {seed}. {DOI_FORMAT_HINT}")
 
     initial_state = {
         "query": req.query,

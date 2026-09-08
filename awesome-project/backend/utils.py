@@ -17,6 +17,13 @@ _DOI_PREFIXES = (
     "doi:",
 )
 
+# Shown to the user whenever a DOI fails validation.
+DOI_FORMAT_HINT = (
+    'A DOI must look like "10.<registrant>/<suffix>" — for example '
+    "10.1145/3292500.3330701 or 10.48550/arXiv.2301.04104. A "
+    "https://doi.org/10.... link is also accepted."
+)
+
 
 def normalize_doi(value: str) -> str:
     """Strip a URL / `doi:` wrapper so just the bare `10.x/...` identifier is left."""
