@@ -24,7 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import streamlit as st
 
 from backend.pipeline.graph import build_graph
-from backend.utils import is_doi, DOI_FORMAT_HINT
+from backend.utils import DOI_FORMAT_HINT, valid_doi
 
 # Pipeline node name -> plain progress label shown to the user.
 STEP_LABELS = {
@@ -82,10 +82,18 @@ if submitted:
         st.warning("Enter at least a keyword phrase or one DOI.")
         st.stop()
 
-    invalid = [d for d in doi_list if not is_doi(d)]
-    if invalid:
-        st.error("DOI is not valid: " + ", ".join(invalid) + "\n\n" + DOI_FORMAT_HINT)
-        st.stop()
+    if doi_list:
+        try:
+            with st.spinner("Checking DOIs..."):
+                for d in doi_list:
+                    valid_doi(d)
+        except ValueError as e:
+            # valid_doi bakes the format hint into some of its messages; peel it
+            # back off so we can show the error and the hint as separate blocks.
+            message = str(e).replace(DOI_FORMAT_HINT, "").strip()
+            st.error(message)
+            st.info(DOI_FORMAT_HINT)
+            st.stop()
 
     payload = {"breadth": breadth}
     if kw:

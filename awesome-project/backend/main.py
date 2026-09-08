@@ -8,7 +8,7 @@ from fastapi import FastAPI, HTTPException
 
 from backend.schemas import ReviewRequest, ReviewResponse, ExtractedPaper
 from backend.pipeline.graph import build_graph
-from backend.utils import normalize_paper, is_doi, looks_like_doi_attempt, DOI_FORMAT_HINT
+from backend.utils import *
 
 app = FastAPI(title="Literature Review Agent")
 
@@ -30,11 +30,15 @@ def review(req: ReviewRequest):
     if not req.query and not req.seed_papers:
         raise HTTPException(400, "Provide at least a query or seed_papers.")
 
-    # seed_papers is a mix of titles / arXiv IDs / DOIs. Only reject entries
-    # that were clearly meant as a DOI but are malformed.
-    for seed in req.seed_papers or []:
-        if looks_like_doi_attempt(seed) and not is_doi(seed):
-            raise HTTPException(400, f"DOI is not valid: {seed}. {DOI_FORMAT_HINT}")
+    # seed_papers is a mix of titles / arXiv IDs / DOIs. For entries that were
+    # clearly meant as a DOI, verify each resolves on Semantic Scholar.
+    doi_seeds = [s for s in (req.seed_papers or []) if looks_like_doi_attempt(s)]
+    if doi_seeds:
+        try:
+            for seed in doi_seeds:
+                valid_doi(seed)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
 
     initial_state = {
         "query": req.query,
