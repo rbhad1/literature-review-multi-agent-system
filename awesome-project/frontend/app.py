@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import streamlit as st
 
 from backend.pipeline.graph import build_graph
+from backend.utils import is_doi
 
 # Pipeline node name -> plain progress label shown to the user.
 STEP_LABELS = {
@@ -79,6 +80,11 @@ if submitted:
     doi_list = [d.strip() for d in dois.split(",") if d.strip()]
     if not kw and not doi_list:
         st.warning("Enter at least a keyword phrase or one DOI.")
+        st.stop()
+
+    invalid = [d for d in doi_list if not is_doi(d)]
+    if invalid:
+        st.error("DOI not valid: " + ", ".join(invalid))
         st.stop()
 
     payload = {"breadth": breadth}

@@ -5,7 +5,39 @@ flat author name lists. This is the single place that reconciles the two,
 so pipeline code can work with raw S2 dicts and only normalize at the edge
 (right before building the API response).
 """
+import re
 from typing import List
+
+# A DOI is "10." + registrant code + "/" + an opaque suffix. This is the
+# common practical pattern (Crossref's own recommendation), not the full spec.
+_DOI_RE = re.compile(r"^10\.\d{4,9}/[-._;()/:a-z0-9]+$", re.IGNORECASE)
+_DOI_PREFIXES = (
+    "https://doi.org/", "http://doi.org/",
+    "https://dx.doi.org/", "http://dx.doi.org/",
+    "doi:",
+)
+
+
+def normalize_doi(value: str) -> str:
+    """Strip a URL / `doi:` wrapper so just the bare `10.x/...` identifier is left."""
+    s = (value or "").strip()
+    low = s.lower()
+    for prefix in _DOI_PREFIXES:
+        if low.startswith(prefix):
+            return s[len(prefix):]
+    return s
+
+
+def is_doi(value: str) -> bool:
+    """True if `value` (optionally URL/`doi:`-wrapped) is a well-formed DOI."""
+    return bool(_DOI_RE.match(normalize_doi(value)))
+
+
+def looks_like_doi_attempt(value: str) -> bool:
+    """True if the user clearly meant this to be a DOI (so a malformed one
+    should be rejected rather than passed through as a title search)."""
+    low = (value or "").strip().lower()
+    return low.startswith("10.") or low.startswith("doi:") or "doi.org/" in low
 
 
 def normalize_paper(raw: dict) -> dict:
