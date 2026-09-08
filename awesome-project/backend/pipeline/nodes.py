@@ -77,8 +77,10 @@ def retrieval_node(state: PipelineState) -> PipelineState:
 
     # --- seed path ---
     seed_ids = state.get("seed_paper_ids") or []
-    resolved = s2.resolve_papers(seed_ids)  # one /paper/batch call for ids+DOIs
+    # Resolve each seed DOI individually instead of batching
+    resolved = [p for p in (s2.resolve_paper(sid) for sid in seed_ids) if p]
     state["seed_papers_resolved"] = resolved
+
 
     seed_candidates = []
     if resolved:

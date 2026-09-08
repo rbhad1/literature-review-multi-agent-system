@@ -27,6 +27,16 @@ DOI_FORMAT_HINT = (
 )
 
 
+def normalize_doi(value: str) -> str:
+    """Strip whitespace and any resolver prefix ("https://doi.org/", "doi:", ...)
+    so what's left is the bare DOI ready for `_DOI_RE` to match."""
+    text = (value or "").strip()
+    for prefix in _DOI_PREFIXES:
+        if text[: len(prefix)].lower() == prefix:
+            return text[len(prefix):].strip()
+    return text
+
+
 def valid_doi(value: str) -> List[str]:
     """Extract every DOI in `value` and confirm each is registered by resolving
     it through the canonical DOI resolver at doi.org (the International DOI

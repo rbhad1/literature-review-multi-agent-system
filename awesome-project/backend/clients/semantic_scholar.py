@@ -15,7 +15,18 @@ from urllib3.util.retry import Retry
 
 from backend import config
 
+# SPECTER2 embeddings ride along on the response and are used by the
+# specter_similarity strategy. Only /paper/search, /paper/batch and
+# /paper/{id} accept `embedding.specter_v2`.
 FIELDS = "title,abstract,year,authors,citationCount,externalIds,embedding.specter_v2"
+
+# The Recommendations API AND the /paper/{id}/references + /citations endpoints
+# reject the ENTIRE request with 400 "Unrecognized or unsupported fields" if
+# asked for any `embedding` field, so those callers get the embedding-free
+# subset. Candidates pulled this way just won't participate in specter_similarity
+# (it skips papers with no vector) -- the recommender and agentic strategies
+# don't need embeddings anyway.
+FIELDS_NO_EMBEDDING = "title,abstract,year,authors,citationCount,externalIds"
 
 _TIMEOUT = 20
 _MIN_WAIT = 3  # seconds -- floor on every retry sleep, backoff or Retry-After
@@ -70,7 +81,9 @@ def search_papers(query: str, year_min: Optional[int] = None, year_max: Optional
         params["year"] = f"{year_min or ''}-{year_max or ''}"
     resp = _get("/paper/search", params)
     resp.raise_for_status()
-    return resp.json().get("data", [])
+    # S2 sends `"data": null` (not an empty list) when a query has zero hits,
+    # so `.get("data", [])` isn't enough -- `or []` covers the null case too.
+    return resp.json().get("data") or []
 
 
 def get_papers_batch(ids: List[str], fields: str = FIELDS) -> List[Optional[dict]]:
@@ -89,7 +102,7 @@ def get_papers_batch(ids: List[str], fields: str = FIELDS) -> List[Optional[dict
         timeout=_TIMEOUT,
     )
     resp.raise_for_status()
-    return resp.json()  # list aligned with ids, None for misses
+    return resp.json() or []  # list aligned with ids, None for misses
 
 
 def _normalize_identifier(identifier: str) -> Optional[str]:
@@ -150,24 +163,24 @@ def get_recommendations(seed_paper_ids: List[str], limit: int = 20) -> List[dict
         return []
     resp = _session.post(
         config.S2_RECOMMENDATIONS_URL,
-        params={"fields": FIELDS, "limit": limit},
+        params={"fields": FIELDS_NO_EMBEDDING, "limit": limit},
         json={"positivePaperIds": seed_paper_ids},
         headers=_headers(),
         timeout=_TIMEOUT,
     )
     resp.raise_for_status()
-    return resp.json().get("recommendedPapers", [])
+    return resp.json().get("recommendedPapers") or []
 
 
 def get_references(paper_id: str, limit: int = 50) -> List[dict]:
     """Papers THIS paper cites (backward -- foundational work it builds on)."""
-    resp = _get(f"/paper/{paper_id}/references", {"fields": FIELDS, "limit": limit})
+    resp = _get(f"/paper/{paper_id}/references", {"fields": FIELDS_NO_EMBEDDING, "limit": limit})
     resp.raise_for_status()
-    return [r["citedPaper"] for r in resp.json().get("data", []) if r.get("citedPaper")]
+    return [r["citedPaper"] for r in (resp.json().get("data") or []) if r.get("citedPaper")]
 
 
 def get_citations(paper_id: str, limit: int = 50) -> List[dict]:
     """Papers that cite THIS paper (forward -- newer work building on it)."""
-    resp = _get(f"/paper/{paper_id}/citations", {"fields": FIELDS, "limit": limit})
+    resp = _get(f"/paper/{paper_id}/citations", {"fields": FIELDS_NO_EMBEDDING, "limit": limit})
     resp.raise_for_status()
-    return [c["citingPaper"] for c in resp.json().get("data", []) if c.get("citingPaper")]
+    return [c["citingPaper"] for c in (resp.json().get("data") or []) if c.get("citingPaper")]

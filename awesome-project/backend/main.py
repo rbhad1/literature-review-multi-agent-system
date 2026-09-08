@@ -30,16 +30,6 @@ def review(req: ReviewRequest):
     if not req.query and not req.seed_papers:
         raise HTTPException(400, "Provide at least a query or seed_papers.")
 
-    # seed_papers is a mix of titles / arXiv IDs / DOIs. For entries that were
-    # clearly meant as a DOI, verify each resolves on Semantic Scholar.
-    doi_seeds = [s for s in (req.seed_papers or []) if looks_like_doi_attempt(s)]
-    if doi_seeds:
-        try:
-            for seed in doi_seeds:
-                valid_doi(seed)
-        except ValueError as e:
-            raise HTTPException(400, str(e))
-
     initial_state = {
         "query": req.query,
         "seed_paper_ids": req.seed_papers,
