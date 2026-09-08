@@ -22,13 +22,13 @@ S2_RECOMMENDATIONS_URL = "https://api.semanticscholar.org/recommendations/v1/pap
 #   uv run python -c "from google import genai; from backend import config; \
 #     [print(m.name) for m in genai.Client(api_key=config.GEMINI_API_KEY).models.list()]"
 # 'gemini-2.5-pro' is unavailable / quota-exhausted on this key -- synthesis
-# and critic run on gemini-3.5-flash instead for now.
+# and critic run on gemini-3.5-flash-lite instead for now.
 MODEL_ROUTING = {
     "planner": "gemini-3.5-flash-lite",
     "extraction": "gemini-3.5-flash-lite",
     "relevance_judge": "gemini-3.5-flash-lite",
-    "synthesis": "gemini-3.5-flash",
-    "critic": "gemini-3.5-flash",
+    "synthesis": "gemini-3.5-flash-lite",
+    "critic": "gemini-3.5-flash-lite",
 }
 
 # --- Breadth presets (niche <-> broad), keyed 1-5 -------------------------

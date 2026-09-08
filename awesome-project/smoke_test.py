@@ -12,9 +12,22 @@ instead of one giant dict.
 At least one of query / seed DOI must be given. Multiple DOIs: comma-separate.
 """
 import json
+import logging
+import sys
 import textwrap
+import time
+from pathlib import Path
 
 from backend.pipeline.graph import build_graph
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s  %(levelname)-5s  %(message)s",
+    datefmt="%H:%M:%S",
+    stream=sys.stdout,
+)
+log = logging.getLogger("smoke")
+logging.getLogger("google_genai").setLevel(logging.ERROR)
 
 
 def _prompt_inputs() -> dict:
@@ -33,37 +46,76 @@ def _prompt_inputs() -> dict:
     return state
 
 
+# Collapse any value to a single-line string capped at `n` chars, so long
+# abstracts / lists / dicts don't blow up the console summary. Non-strings are
+# JSON-dumped first (default=str handles anything not natively serializable).
 def _short(x, n=200):
     s = x if isinstance(x, str) else json.dumps(x, default=str)
     return textwrap.shorten(s, width=n, placeholder=" ...")
 
 
+# Emit one aligned "label: value" row of the per-stage summary at INFO level.
 def _line(label, value):
-    print(f"  {label:<22} {value}")
+    log.info("  %-22s %s", label, value)
 
 
+# Emit a WARNING row only when `cond` is true -- used to surface a suspected
+# problem (empty output, missing field, malformed JSON) without aborting the run.
 def _flag(cond, msg):
     if cond:
-        print(f"  !! {msg}")
+        log.warning("  !! %s", msg)
+
+
+# Recursively drop SPECTER embedding vectors (~768 floats per paper, repeated
+# across query_candidates / ranked / extracted / ...) so results.json stays
+# small and human-readable. The `embedding.model` tag is kept for context.
+def _strip_vectors(obj):
+    if isinstance(obj, dict):
+        return {k: _strip_vectors(v) for k, v in obj.items()
+                if k not in ("vector", "_vector")}
+    if isinstance(obj, list):
+        return [_strip_vectors(v) for v in obj]
+    return obj
+
+
+def _run_graph(graph, initial: dict) -> dict:
+    """Invoke via stream() so each node logs to the console as it finishes,
+    with elapsed time -- makes a slow run visible instead of one long hang."""
+    state: dict = dict(initial)
+    t0 = time.perf_counter()
+    last = t0
+    for update in graph.stream(initial, stream_mode="updates"):
+        for node, delta in update.items():
+            now = time.perf_counter()
+            keys = sorted(delta.keys()) if isinstance(delta, dict) else type(delta).__name__
+            log.info("node %-16s done  (+%.1fs, total %.1fs)  set: %s",
+                     node, now - last, now - t0, keys)
+            last = now
+            if isinstance(delta, dict):
+                state.update(delta)
+    log.info("graph finished in %.1fs", time.perf_counter() - t0)
+    return state
 
 
 def main():
     initial = _prompt_inputs()
-    print("\n" + "=" * 70)
+    log.info("=" * 70)
     _line("query", initial.get("query"))
     _line("seed_paper_ids", initial.get("seed_paper_ids"))
     _line("breadth", initial.get("breadth"))
-    print("=" * 70)
+    log.info("=" * 70)
 
+    log.info("building graph...")
     graph = build_graph()
-    state = graph.invoke(initial)
+    log.info("invoking pipeline (streaming node updates)...")
+    state = _run_graph(graph, initial)
 
-    print("\n[planner]")
+    log.info("[planner]")
     _line("mode", state.get("mode"))
     _line("query_variants", state.get("query_variants"))
     _flag(initial.get("query") and not state.get("query_variants"), "no query variants produced")
 
-    print("\n[retrieval]")
+    log.info("[retrieval]")
     qc = state.get("query_candidates") or []
     sc = state.get("seed_candidates") or []
     resolved = state.get("seed_papers_resolved") or []
@@ -78,11 +130,11 @@ def main():
         _line("sample paper", _short(f"{p.get('title')} | id={p.get('paperId')} | year={p.get('year')} | abstract? {bool(p.get('abstract'))}"))
         _flag(not p.get("paperId"), "candidate missing paperId -- dedup/merge will misbehave")
 
-    print("\n[ranking]")
+    log.info("[ranking]")
     _line("query_ranked", len(state.get("query_ranked") or []))
     _line("seed_ranked", len(state.get("seed_ranked") or []))
 
-    print("\n[ranking_critic]")
+    log.info("[ranking_critic]")
     rc = state.get("ranking_critic") or {}
     _line("verdict", rc.get("verdict"))
     _line("flagged", _short(rc.get("flagged")))
@@ -91,7 +143,7 @@ def main():
     _line("ranked (carried)", len(state.get("ranked") or []))
     _flag(rc and not rc.get("reranked_ids"), "critic ran but returned no ordering (JSON shape mismatch?)")
 
-    print("\n[extraction]")
+    log.info("[extraction]")
     ex = state.get("extracted") or []
     _line("extracted", len(ex))
     if ex:
@@ -100,20 +152,24 @@ def main():
         _line("has limitations", bool(e.get("limitations")))
         _flag(not e.get("summary"), "extraction produced no summary -- prompt/JSON parse issue")
 
-    print("\n[synthesis]")
+    log.info("[synthesis]")
     syn = state.get("synthesis") or {}
     _line("themes", len(syn.get("themes") or []))
     _line("gaps", len(syn.get("gaps") or []))
     _line("narrative", _short(syn.get("narrative"), 300))
     _flag(not syn.get("narrative"), "empty synthesis narrative")
 
-    print("\n[critic]")
+    log.info("[critic]")
     cr = state.get("critic") or {}
     _line("groundedness", cr.get("groundedness_score"))
     _line("flagged_claims", _short(cr.get("flagged_claims")))
 
-    print("\n" + "=" * 70)
-    print("done. final state keys:", sorted(state.keys()))
+    log.info("=" * 70)
+    log.info("done. final state keys: %s", sorted(state.keys()))
+
+    out_path = Path(__file__).parent / "backend" / "results.json"
+    out_path.write_text(json.dumps(_strip_vectors(state), indent=2, default=str), encoding="utf-8")
+    log.info("final state written to %s (embedding vectors stripped)", out_path)
 
 
 if __name__ == "__main__":

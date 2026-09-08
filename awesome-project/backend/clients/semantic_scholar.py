@@ -18,10 +18,26 @@ from backend import config
 FIELDS = "title,abstract,year,authors,citationCount,externalIds,embedding.specter_v2"
 
 _TIMEOUT = 20
+_MIN_WAIT = 3  # seconds -- floor on every retry sleep, backoff or Retry-After
 
-# 429 / 5xx -> back off and retry. backoff_factor=1 => waits ~2s, 4s, 8s, 16s
-# between attempts; Retry-After on a 429 response overrides that when present.
-_retry = Retry(
+
+class _MinWaitRetry(Retry):
+    """urllib3 Retry that never sleeps less than _MIN_WAIT between attempts.
+    urllib3's own first retry has zero backoff and a Retry-After header can ask
+    for less, so we clamp both paths up to the floor."""
+
+    def get_backoff_time(self):
+        return max(_MIN_WAIT, super().get_backoff_time())
+
+    def get_retry_after(self, response):
+        after = super().get_retry_after(response)
+        return max(_MIN_WAIT, after) if after is not None else None
+
+
+# 429 / 5xx -> back off and retry. backoff_factor=1 with the _MIN_WAIT floor
+# => waits ~3s, 3s, 4s, 8s between attempts; a Retry-After header (also floored
+# at 3s) takes precedence when present.
+_retry = _MinWaitRetry(
     total=4,
     backoff_factor=1,
     status_forcelist=(429, 500, 502, 503, 504),
